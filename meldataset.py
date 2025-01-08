@@ -7,13 +7,15 @@ import numpy as np
 from librosa.util import normalize
 from scipy.io.wavfile import read
 from librosa.filters import mel as librosa_mel_fn
+import csv
+import torchaudio
 
 MAX_WAV_VALUE = 32768.0
 
 
 def load_wav(full_path):
-    sampling_rate, data = read(full_path)
-    return data, sampling_rate
+    audio, sr = torchaudio.load(full_path)
+    return audio, sr
 
 
 def dynamic_range_compression(x, C=1, clip_val=1e-5):
@@ -62,7 +64,7 @@ def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin,
     y = y.squeeze(1)
 
     spec = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[str(y.device)],
-                      center=center, pad_mode='reflect', normalized=False, onesided=True)
+                      center=center, pad_mode='reflect', normalized=False, onesided=True, return_complex=False)
 
     spec = torch.sqrt(spec.pow(2).sum(-1)+(1e-9))
 
@@ -71,6 +73,13 @@ def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin,
 
     return spec
 
+def load_audio(audio_filename):
+    # audioの読み込みで勾配計算を無効にする
+    with torch.no_grad():
+        audio, sr = torchaudio.load(audio_filename)
+        audio = ((audio[0, :] - audio[1, :]) / 2).unsqueeze(0)  # ステレオの平均を取る
+        audio = torch.clamp(audio[0], -1.0, 1.0)  # -1.0～1.0に正規化
+    return audio, sr
 
 def get_dataset_filelist(a):
     with open(a.input_training_file, 'r', encoding='utf-8') as fi:
@@ -83,9 +92,27 @@ def get_dataset_filelist(a):
     return training_files, validation_files
 
 
+def get_audio_filelist(a):
+    # トレーニングデータのファイルを読み込む
+    with open(a.input_training_file, 'r', encoding='utf-8') as fi:
+        reader = csv.reader(fi)
+        next(reader)  # 1行目（カラム名）をスキップ
+        training_files = [row[0]  # Audio Pathの部分（1列目）
+                          for row in reader if len(row) > 0]
+
+    # バリデーションデータのファイルを読み込む
+    with open(a.input_validation_file, 'r', encoding='utf-8') as fi:
+        reader = csv.reader(fi)
+        next(reader)  # 1行目（カラム名）をスキップ
+        validation_files = [row[0]  # Audio Pathの部分（1列目）
+                            for row in reader if len(row) > 0]
+
+    return training_files, validation_files
+
+
 class MelDataset(torch.utils.data.Dataset):
     def __init__(self, training_files, segment_size, n_fft, num_mels,
-                 hop_size, win_size, sampling_rate,  fmin, fmax, split=True, shuffle=True, n_cache_reuse=1,
+                 hop_size, win_size, sampling_rate,  fmin, fmax, split=True, shuffle=True, n_cache_reuse=0,
                  device=None, fmax_loss=None, fine_tuning=False, base_mels_path=None):
         self.audio_files = training_files
         random.seed(1234)
@@ -111,10 +138,7 @@ class MelDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         filename = self.audio_files[index]
         if self._cache_ref_count == 0:
-            audio, sampling_rate = load_wav(filename)
-            audio = audio / MAX_WAV_VALUE
-            if not self.fine_tuning:
-                audio = normalize(audio) * 0.95
+            audio, sampling_rate = load_audio(filename)
             self.cached_wav = audio
             if sampling_rate != self.sampling_rate:
                 raise ValueError("{} SR doesn't match target {} SR".format(
@@ -126,6 +150,8 @@ class MelDataset(torch.utils.data.Dataset):
 
         audio = torch.FloatTensor(audio)
         audio = audio.unsqueeze(0)
+        
+        
 
         if not self.fine_tuning:
             if self.split:
@@ -136,6 +162,7 @@ class MelDataset(torch.utils.data.Dataset):
                 else:
                     audio = torch.nn.functional.pad(audio, (0, self.segment_size - audio.size(1)), 'constant')
 
+            
             mel = mel_spectrogram(audio, self.n_fft, self.num_mels,
                                   self.sampling_rate, self.hop_size, self.win_size, self.fmin, self.fmax,
                                   center=False)
@@ -155,6 +182,7 @@ class MelDataset(torch.utils.data.Dataset):
                     mel = mel[:, :, mel_start:mel_start + frames_per_seg]
                     audio = audio[:, mel_start * self.hop_size:(mel_start + frames_per_seg) * self.hop_size]
                 else:
+                    
                     mel = torch.nn.functional.pad(mel, (0, frames_per_seg - mel.size(2)), 'constant')
                     audio = torch.nn.functional.pad(audio, (0, self.segment_size - audio.size(1)), 'constant')
 

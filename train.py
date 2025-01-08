@@ -13,7 +13,7 @@ import torch.multiprocessing as mp
 from torch.distributed import init_process_group
 from torch.nn.parallel import DistributedDataParallel
 from env import AttrDict, build_env
-from meldataset import MelDataset, mel_spectrogram, get_dataset_filelist
+from meldataset import MelDataset, mel_spectrogram, get_dataset_filelist, get_audio_filelist
 from models import Generator, MultiPeriodDiscriminator, MultiScaleDiscriminator, feature_loss, generator_loss,\
     discriminator_loss
 from utils import plot_spectrogram, scan_checkpoint, load_checkpoint, save_checkpoint
@@ -71,7 +71,7 @@ def train(rank, a, h):
     scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=h.lr_decay, last_epoch=last_epoch)
     scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=h.lr_decay, last_epoch=last_epoch)
 
-    training_filelist, validation_filelist = get_dataset_filelist(a)
+    training_filelist, validation_filelist = get_audio_filelist(a)
 
     trainset = MelDataset(training_filelist, h.segment_size, h.n_fft, h.num_mels,
                           h.hop_size, h.win_size, h.sampling_rate, h.fmin, h.fmax, n_cache_reuse=0,
@@ -143,7 +143,7 @@ def train(rank, a, h):
 
             # L1 Mel-Spectrogram Loss
             loss_mel = F.l1_loss(y_mel, y_g_hat_mel) * 45
-
+            
             y_df_hat_r, y_df_hat_g, fmap_f_r, fmap_f_g = mpd(y, y_g_hat)
             y_ds_hat_r, y_ds_hat_g, fmap_s_r, fmap_s_g = msd(y, y_g_hat)
             loss_fm_f = feature_loss(fmap_f_r, fmap_f_g)
@@ -230,12 +230,12 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--group_name', default=None)
-    parser.add_argument('--input_wavs_dir', default='LJSpeech-1.1/wavs')
-    parser.add_argument('--input_mels_dir', default='ft_dataset')
-    parser.add_argument('--input_training_file', default='LJSpeech-1.1/training.txt')
-    parser.add_argument('--input_validation_file', default='LJSpeech-1.1/validation.txt')
+    parser.add_argument('--input_wavs_dir', default='/home/h-okano/DiffBinaural/FairPlay/binaural_audios_16000Hz')
+    parser.add_argument('--input_mels_dir', default='/home/h-okano/DiffBinaural/processed_data/diff_melspec')
+    parser.add_argument('--input_training_file', default='/home/h-okano/DiffBinaural/FairPlay/splits_csv/split1/train.csv')
+    parser.add_argument('--input_validation_file', default='/home/h-okano/DiffBinaural/FairPlay/splits_csv/split1/val.csv')
     parser.add_argument('--checkpoint_path', default='cp_hifigan')
-    parser.add_argument('--config', default='')
+    parser.add_argument('--config', default='/home/h-okano/DiffBinaural/hifi-gan/config_v1.json')
     parser.add_argument('--training_epochs', default=3100, type=int)
     parser.add_argument('--stdout_interval', default=5, type=int)
     parser.add_argument('--checkpoint_interval', default=5000, type=int)
